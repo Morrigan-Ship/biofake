@@ -1,0 +1,8 @@
+# build output
+build/
+obj/
+packages/
+dist/
+*.user
+*.pdb
+*.log
