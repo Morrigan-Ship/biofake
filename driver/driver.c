@@ -5,17 +5,7 @@ ANY KIND, EITHER EXPRESSED OR IMPLIED.
 
 BioFake - Virtual WBDI fingerprint sensor driver (KMDF)
 
-Abstract:
-    Implements the Windows Biometric Driver Interface (WBDI) for a purely
-    virtual (root-enumerated) fingerprint sensor. The Windows Biometric
-    Service discovers the device through GUID_DEVINTERFACE_BIOMETRIC_READER
-    and serves synthetic (or user supplied) ANSI-381 fingerprint captures.
-
-    A second vendor device interface (GUID_BIOFAKE_CONTROL) allows the
-    biofakectl.exe tool to manage keys, switch modes and inject payloads.
-
-Environment:
-    Kernel mode, KMDF 1.15+
+Environment: Kernel mode, KMDF 1.15+
 
 --*/
 
@@ -39,9 +29,9 @@ typedef struct _DEVICE_CONTEXT {
     WDFSPINLOCK Lock;
     BIOFAKE_KEY_ENTRY Keys[BIOFAKE_MAX_KEYS];
     ULONG           Mode;
-    ULONG           ActiveKey;          // index or BIOFAKE_NO_KEY
-    WDFREQUEST      PendingCapture;     // pending IOCTL_BIOMETRIC_CAPTURE_DATA or NULL
-    WDFMEMORY       CustomPayload;      // optional custom BIR blob
+    ULONG           ActiveKey;
+    WDFREQUEST      PendingCapture;
+    WDFMEMORY       CustomPayload;
     ULONG           CapturesRequested;
     ULONG           CapturesServed;
     ULONG           CapturesRejected;
@@ -54,6 +44,10 @@ EVT_WDF_DRIVER_DEVICE_ADD          BioFakeEvtDeviceAdd;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL BioFakeEvtIoDeviceControl;
 EVT_WDF_REQUEST_CANCEL             BioFakeEvtRequestCancel;
 
+static const PCWSTR BioFakeKeyName[BIOFAKE_MAX_KEYS] = {
+    L"Key0", L"Key1", L"Key2", L"Key3", L"Key4", L"Key5", L"Key6", L"Key7"
+};
+
 static ULONG BioFakeBirSize(VOID)
 {
     return (ULONG)(sizeof(WINBIO_BIR) +
@@ -64,9 +58,7 @@ static ULONG BioFakeBirSize(VOID)
 }
 
 //
-// Deterministic ANSI-381 BIR builder. The image pattern is fully derived
-// from the key secret so the same key always produces identical data
-// (required for template hash matching).
+// Deterministic ANSI-381 BIR builder: same secret -> identical bytes.
 //
 static VOID BioFakeBuildBir(
     _Out_writes_bytes_(BioFakeBirSize()) PUCHAR Base,
@@ -81,8 +73,7 @@ static VOID BioFakeBuildBir(
     PWINBIO_BDB_ANSI_381_HEADER ah;
     PWINBIO_BDB_ANSI_381_RECORD rec;
     PUCHAR image;
-    ULONG x, y, state = 0x9E3779B9;
-    ULONG i;
+    ULONG x, y, state = 0x9E3779B9, i;
 
     RtlZeroMemory(Base, BioFakeBirSize());
 
@@ -93,8 +84,7 @@ static VOID BioFakeBuildBir(
     bir->HeaderBlock.Size = (ULONG)sizeof(WINBIO_BIR_HEADER);
     bir->HeaderBlock.Offset = (ULONG)sizeof(WINBIO_BIR);
     bir->StandardDataBlock.Size = (ULONG)(sizeof(WINBIO_BDB_ANSI_381_HEADER) +
-                                          sizeof(WINBIO_BDB_ANSI_381_RECORD) +
-                                          imgLen);
+                                          sizeof(WINBIO_BDB_ANSI_381_RECORD) + imgLen);
     bir->StandardDataBlock.Offset = (ULONG)(sizeof(WINBIO_BIR) + sizeof(WINBIO_BIR_HEADER));
 
     header = (PWINBIO_BIR_HEADER)(Base + bir->HeaderBlock.Offset);
@@ -112,15 +102,15 @@ static VOID BioFakeBuildBir(
     header->Subtype = WINBIO_ANSI_381_POS_RH_INDEX_FINGER;
     header->Purpose = Purpose;
     header->DataQuality = 90;
-    header->CreationDate.QuadPart = 0;              // deterministic on purpose
+    header->CreationDate.QuadPart = 0;      // deterministic on purpose
     header->BiometricDataFormat.Owner = WINBIO_ANSI_381_FORMAT_OWNER;
     header->BiometricDataFormat.Type = WINBIO_ANSI_381_FORMAT_TYPE;
 
     ah = (PWINBIO_BDB_ANSI_381_HEADER)(Base + bir->StandardDataBlock.Offset);
     ah->RecordLength = (ULONG64)(sizeof(WINBIO_BDB_ANSI_381_HEADER) +
                                  sizeof(WINBIO_BDB_ANSI_381_RECORD) + imgLen);
-    ah->FormatIdentifier = 0x46495200;              // 'FIR\0'
-    ah->VersionNumber = 0x30313000;                 // '010\0'
+    ah->FormatIdentifier = 0x46495200;      // 'FIR\0'
+    ah->VersionNumber = 0x30313000;         // '010\0'
     ah->CaptureDeviceId = 1;
     ah->ImageAcquisitionLevel = 20;
     ah->HorizontalScanResolution = 500;
@@ -147,24 +137,21 @@ static VOID BioFakeBuildBir(
     for (y = 0; y < BIOFAKE_IMG_HEIGHT; y++) {
         for (x = 0; x < BIOFAKE_IMG_WIDTH; x++) {
             LONG dx = (LONG)x - (BIOFAKE_IMG_WIDTH / 2);
-            LONG dy = (LONG)((LONG)y - (LONG)(BIOFAKE_IMG_HEIGHT / 2)) * 3 / 2;
+            LONG dy = ((LONG)y - (LONG)(BIOFAKE_IMG_HEIGHT / 2)) * 3 / 2;
             LONG d2 = dx * dx + dy * dy;
-            ULONG band = ((d2 / 29) & 1) ? 70 : 190;
+            ULONG band = ((ULONG)(d2 / 29) & 1) ? 70 : 190;
+            ULONG ex = (x < BIOFAKE_IMG_WIDTH - 1 - x) ? x : (BIOFAKE_IMG_WIDTH - 1 - x);
+            ULONG ey = (y < BIOFAKE_IMG_HEIGHT - 1 - y) ? y : (BIOFAKE_IMG_HEIGHT - 1 - y);
+            ULONG edge = (ex < ey) ? ex : ey;
+            ULONG fade = (edge < 12) ? edge : 12;
             ULONG v;
 
             state = state * 1664525u + 1013904223u;
             band = (band + ((state >> 24) & 0x1F)) & 0xFF;
 
-            {
-                ULONG ex = min(x, BIOFAKE_IMG_WIDTH - 1 - x);
-                ULONG ey = min(y, BIOFAKE_IMG_HEIGHT - 1 - y);
-                ULONG edge = min(ex, ey);
-                ULONG fade = edge < 12 ? edge : 12;   // 0..12
-                v = 255 - (((255 - band) * (fade * 21 + 13)) / 265);
-            }
-
-            if (d2 > 88 * 60) {
-                v = 255;                                // outside the finger area
+            v = 255 - (((255 - band) * (fade * 21 + 13)) / 265);
+            if ((ULONG)d2 > 88u * 60u) {
+                v = 255;
             }
 
             image[y * BIOFAKE_IMG_WIDTH + x] = (UCHAR)v;
@@ -173,7 +160,7 @@ static VOID BioFakeBuildBir(
 }
 
 //
-// Registry persistence (service Parameters key)
+// Registry persistence (HKLM\SYSTEM\CCS\Services\BioFake\Parameters)
 //
 static NTSTATUS BioFakeOpenParamsKey(_In_ ACCESS_MASK Access, _Out_ PHANDLE Handle)
 {
@@ -188,7 +175,6 @@ static NTSTATUS BioFakeOpenParamsKey(_In_ ACCESS_MASK Access, _Out_ PHANDLE Hand
 static VOID BioFakeSaveSettings(_In_ PDEVICE_CONTEXT Ctx)
 {
     HANDLE h = NULL;
-    WCHAR nameBuf[16];
     UNICODE_STRING valueName;
     ULONG i;
 
@@ -202,8 +188,8 @@ static VOID BioFakeSaveSettings(_In_ PDEVICE_CONTEXT Ctx)
     ZwSetValueKey(h, &valueName, 0, REG_DWORD, &Ctx->ActiveKey, sizeof(ULONG));
 
     for (i = 0; i < BIOFAKE_MAX_KEYS; i++) {
-        RtlUnicodeStringPrintf(&valueName, nameBuf, sizeof(nameBuf), L"Key%lu", i);
-        if (Ctx->Keys[i].Slot != 0 || Ctx->Keys[i].Name[0] != 0) {
+        RtlInitUnicodeString(&valueName, BioFakeKeyName[i]);
+        if (Ctx->Keys[i].Name[0] != 0) {
             ZwSetValueKey(h, &valueName, 0, REG_BINARY, &Ctx->Keys[i], sizeof(BIOFAKE_KEY_ENTRY));
         } else {
             ZwDeleteValueKey(h, &valueName);
@@ -216,7 +202,6 @@ static VOID BioFakeSaveSettings(_In_ PDEVICE_CONTEXT Ctx)
 static VOID BioFakeLoadSettings(_In_ PDEVICE_CONTEXT Ctx)
 {
     HANDLE h = NULL;
-    WCHAR nameBuf[16];
     UNICODE_STRING valueName;
     UCHAR info[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(BIOFAKE_KEY_ENTRY) + 8];
     ULONG i, result;
@@ -230,19 +215,21 @@ static VOID BioFakeLoadSettings(_In_ PDEVICE_CONTEXT Ctx)
     RtlInitUnicodeString(&valueName, L"Mode");
     if (NT_SUCCESS(ZwQueryValueKey(h, &valueName, KeyValuePartialInformation,
                                    info, sizeof(info), &result)) &&
-        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->Type == REG_DWORD) {
+        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->Type == REG_DWORD &&
+        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->DataLength == sizeof(ULONG)) {
         Ctx->Mode = *(ULONG UNALIGNED *)((PKEY_VALUE_PARTIAL_INFORMATION)info)->Data;
     }
 
     RtlInitUnicodeString(&valueName, L"ActiveKey");
     if (NT_SUCCESS(ZwQueryValueKey(h, &valueName, KeyValuePartialInformation,
                                    info, sizeof(info), &result)) &&
-        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->Type == REG_DWORD) {
+        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->Type == REG_DWORD &&
+        ((PKEY_VALUE_PARTIAL_INFORMATION)info)->DataLength == sizeof(ULONG)) {
         Ctx->ActiveKey = *(ULONG UNALIGNED *)((PKEY_VALUE_PARTIAL_INFORMATION)info)->Data;
     }
 
     for (i = 0; i < BIOFAKE_MAX_KEYS; i++) {
-        RtlUnicodeStringPrintf(&valueName, nameBuf, sizeof(nameBuf), L"Key%lu", i);
+        RtlInitUnicodeString(&valueName, BioFakeKeyName[i]);
         if (NT_SUCCESS(ZwQueryValueKey(h, &valueName, KeyValuePartialInformation,
                                        info, sizeof(info), &result)) &&
             ((PKEY_VALUE_PARTIAL_INFORMATION)info)->Type == REG_BINARY &&
@@ -271,15 +258,11 @@ static NTSTATUS BioFakeFindKey(_In_ PDEVICE_CONTEXT Ctx, _In_ PCWSTR Name, _Out_
 }
 
 //
-// Complete the pending WBDI capture request (if any).
-// CallerData: NULL = cancel-style completion (Status only).
+// Pop the pending capture request (if any) and unmark it cancelable.
+// Returns NULL if nothing pending. On non-NULL return the caller owns the
+// request and must complete it (unless Unmark returns STATUS_CANCELLED).
 //
-static VOID BioFakeCompletePendingCapture(
-    _In_ PDEVICE_CONTEXT Ctx,
-    _In_ NTSTATUS Status,
-    _In_opt_ PCUCHAR BirData,
-    _In_ ULONG BirSize
-    )
+static WDFREQUEST BioFakePopPending(_In_ PDEVICE_CONTEXT Ctx)
 {
     WDFREQUEST request = NULL;
     NTSTATUS unmark;
@@ -292,42 +275,22 @@ static VOID BioFakeCompletePendingCapture(
     WdfSpinLockRelease(Ctx->Lock);
 
     if (request == NULL) {
-        return;
+        return NULL;
     }
 
     unmark = WdfRequestUnmarkCancelable(request);
     if (unmark == STATUS_CANCELLED) {
-        return;
+        return NULL;
     }
+    return request;
+}
 
-    if (BirData != NULL) {
-        PVOID out = NULL;
-        SIZE_T outLen = 0;
-        ULONG required = (ULONG)(FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data) + BirSize);
-
-        if (NT_SUCCESS(WdfRequestRetrieveOutputBuffer(request, sizeof(DWORD), &out, &outLen))) {
-            if (outLen >= required) {
-                PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)out;
-                RtlZeroMemory(cap, required);
-                cap->PayloadSize = required;
-                cap->WinBioHresult = S_OK;
-                cap->SensorStatus = WINBIO_SENSOR_ACCEPT;
-                cap->RejectDetail = 0;
-                cap->CaptureData.Size = BirSize;
-                RtlCopyMemory(cap->CaptureData.Data, BirData, BirSize);
-                WdfRequestCompleteWithInformation(request, STATUS_SUCCESS, required);
-                return;
-            }
-            // buffer too small: report the required size (size-query protocol)
-            ((PDWORD)out)[0] = required;
-            WdfRequestCompleteWithInformation(request, STATUS_SUCCESS, sizeof(DWORD));
-            return;
-        }
-        WdfRequestComplete(request, STATUS_INVALID_PARAMETER);
-        return;
+static VOID BioFakeCompletePendingStatus(_In_ PDEVICE_CONTEXT Ctx, _In_ NTSTATUS Status)
+{
+    WDFREQUEST request = BioFakePopPending(Ctx);
+    if (request != NULL) {
+        WdfRequestComplete(request, Status);
     }
-
-    WdfRequestComplete(request, Status);
 }
 
 VOID
@@ -369,7 +332,6 @@ BioFakeEvtDeviceAdd(
 
     ctx = BioFakeGetContext(device);
     RtlZeroMemory(ctx, sizeof(DEVICE_CONTEXT));
-    ctx->Device = device;
     ctx->Mode = BIOFAKE_MODE_READY;
     ctx->ActiveKey = BIOFAKE_NO_KEY;
 
@@ -399,7 +361,6 @@ BioFakeEvtDeviceAdd(
     }
 
     BioFakeLoadSettings(ctx);
-
     return STATUS_SUCCESS;
 }
 
@@ -415,6 +376,70 @@ DriverEntry(
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
 }
 
+//
+// Fill a WINBIO_CAPTURE_DATA success payload directly into the request's
+// output buffer and complete.
+//
+static VOID BioFakeFillAndCompleteCapture(
+    _In_ WDFREQUEST Request,
+    _In_reads_bytes_(BirSize) PUCHAR BirData,
+    _In_ ULONG BirSize
+    )
+{
+    ULONG required = (ULONG)(FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data) + BirSize);
+    PVOID out = NULL;
+    SIZE_T outLen = 0;
+
+    if (NT_SUCCESS(WdfRequestRetrieveOutputBuffer(Request, sizeof(DWORD), &out, &outLen))) {
+        if (outLen >= required) {
+            PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)out;
+            RtlZeroMemory(cap, required);
+            cap->PayloadSize = required;
+            cap->WinBioHresult = S_OK;
+            cap->SensorStatus = WINBIO_SENSOR_ACCEPT;
+            cap->RejectDetail = 0;
+            cap->CaptureData.Size = BirSize;
+            RtlCopyMemory(cap->CaptureData.Data, BirData, BirSize);
+            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, required);
+            return;
+        }
+        ((PDWORD)out)[0] = required;
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(DWORD));
+        return;
+    }
+    WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+}
+
+static VOID BioFakeCompleteStatusPayload(
+    _In_ WDFREQUEST Request,
+    _In_ HRESULT WinBioHresult,
+    _In_ ULONG SensorStatus,
+    _In_ ULONG RejectDetail
+    )
+{
+    PVOID out = NULL;
+    SIZE_T outLen = 0;
+    ULONG payloadSize = (ULONG)FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data);
+
+    if (NT_SUCCESS(WdfRequestRetrieveOutputBuffer(Request, sizeof(DWORD), &out, &outLen))) {
+        if (outLen >= payloadSize) {
+            PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)out;
+            RtlZeroMemory(cap, payloadSize);
+            cap->PayloadSize = payloadSize;
+            cap->WinBioHresult = WinBioHresult;
+            cap->SensorStatus = SensorStatus;
+            cap->RejectDetail = RejectDetail;
+            cap->CaptureData.Size = 0;
+            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, payloadSize);
+            return;
+        }
+        ((PDWORD)out)[0] = payloadSize;
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(DWORD));
+        return;
+    }
+    WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+}
+
 VOID
 BioFakeEvtIoDeviceControl(
     _In_ WDFQUEUE Queue,
@@ -427,11 +452,10 @@ BioFakeEvtIoDeviceControl(
     PDEVICE_CONTEXT ctx = BioFakeGetContext(WdfIoQueueGetDevice(Queue));
     NTSTATUS status = STATUS_SUCCESS;
     PVOID outBuf = NULL, inBuf = NULL;
-    SIZE_T outLen = 0, inLen = 0;
+    SIZE_T outLen = 0, inLen = 0, memLen = 0;
     ULONG mode, active, customSize = 0, i;
     BOOLEAN pending, hasActive, hasCustom;
     UCHAR secret[BIOFAKE_SECRET_LEN];
-    PUCHAR customData = NULL;
 
     UNREFERENCED_PARAMETER(OutputBufferLength);
     UNREFERENCED_PARAMETER(InputBufferLength);
@@ -446,8 +470,8 @@ BioFakeEvtIoDeviceControl(
     }
     hasCustom = (ctx->CustomPayload != NULL);
     if (hasCustom) {
-        WdfMemoryGetBuffer(ctx->CustomPayload, &outLen);
-        customSize = (ULONG)outLen;
+        WdfMemoryGetBuffer(ctx->CustomPayload, &memLen);
+        customSize = (ULONG)memLen;
     }
     ctx->CapturesRequested++;
     WdfSpinLockRelease(ctx->Lock);
@@ -476,9 +500,9 @@ BioFakeEvtIoDeviceControl(
         attr.SensorType = WINBIO_TYPE_FINGERPRINT;
         attr.SensorSubType = WINBIO_FP_SENSOR_SUBTYPE_TOUCH;
         attr.Capabilities = WINBIO_CAPABILITY_SENSOR;
-        wcscpy_s(attr.ManufacturerName, WINBIO_MAX_STRING_LEN, L"BioFake Project");
-        wcscpy_s(attr.ModelName, WINBIO_MAX_STRING_LEN, L"BioFake Virtual Sensor");
-        wcscpy_s(attr.SerialNumber, WINBIO_MAX_STRING_LEN, L"BF-VS-0000001");
+        RtlStringCchCopyW(attr.ManufacturerName, WINBIO_MAX_STRING_LEN, L"BioFake Project");
+        RtlStringCchCopyW(attr.ModelName, WINBIO_MAX_STRING_LEN, L"BioFake Virtual Sensor");
+        RtlStringCchCopyW(attr.SerialNumber, WINBIO_MAX_STRING_LEN, L"BF-VS-0000001");
         attr.FirmwareVersion.MajorVersion = 1;
         attr.FirmwareVersion.MinorVersion = 0;
         attr.SupportedFormatEntries = 1;
@@ -503,7 +527,6 @@ BioFakeEvtIoDeviceControl(
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(DWORD));
             return;
         }
-
         RtlZeroMemory(&diag, sizeof(diag));
         diag.PayloadSize = payloadSize;
         diag.WinBioHresult = S_OK;
@@ -540,11 +563,16 @@ BioFakeEvtIoDeviceControl(
     {
         WINBIO_BLANK_PAYLOAD blank;
 
-        BioFakeCompletePendingCapture(ctx, WINBIO_E_CANCELED, NULL, 0);
+        BioFakeCompletePendingStatus(ctx, (NTSTATUS)WINBIO_E_CANCELED);
 
-        status = WdfRequestRetrieveOutputBuffer(Request, sizeof(WINBIO_BLANK_PAYLOAD), &outBuf, &outLen);
+        status = WdfRequestRetrieveOutputBuffer(Request, sizeof(DWORD), &outBuf, &outLen);
         if (!NT_SUCCESS(status)) break;
 
+        if (outLen < sizeof(WINBIO_BLANK_PAYLOAD)) {
+            ((PDWORD)outBuf)[0] = (DWORD)sizeof(WINBIO_BLANK_PAYLOAD);
+            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, sizeof(DWORD));
+            return;
+        }
         blank.PayloadSize = (DWORD)sizeof(WINBIO_BLANK_PAYLOAD);
         blank.WinBioHresult = S_OK;
         RtlCopyMemory(outBuf, &blank, sizeof(blank));
@@ -619,61 +647,40 @@ BioFakeEvtIoDeviceControl(
         }
 
         if (mode == BIOFAKE_MODE_REJECT) {
-            PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)outBuf;
-            RtlZeroMemory(cap, sizeof(WINBIO_CAPTURE_DATA));
-            cap->PayloadSize = (DWORD)FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data);
-            cap->WinBioHresult = S_OK;
-            cap->SensorStatus = WINBIO_SENSOR_REJECT;
-            cap->RejectDetail = WINBIO_FP_POOR_QUALITY;
-            cap->CaptureData.Size = 0;
             WdfSpinLockAcquire(ctx->Lock);
             ctx->CapturesRejected++;
             WdfSpinLockRelease(ctx->Lock);
-            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, cap->PayloadSize);
+            BioFakeCompleteStatusPayload(Request, S_OK, WINBIO_SENSOR_REJECT, WINBIO_FP_POOR_QUALITY);
             return;
         }
 
         if (mode == BIOFAKE_MODE_FAILURE) {
-            PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)outBuf;
-            RtlZeroMemory(cap, sizeof(WINBIO_CAPTURE_DATA));
-            cap->PayloadSize = (DWORD)FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data);
-            cap->WinBioHresult = WINBIO_E_DEVICE_FAILURE;
-            cap->SensorStatus = WINBIO_SENSOR_FAILURE;
-            cap->RejectDetail = 0;
-            cap->CaptureData.Size = 0;
             WdfSpinLockAcquire(ctx->Lock);
             ctx->CapturesFailed++;
             WdfSpinLockRelease(ctx->Lock);
-            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, cap->PayloadSize);
+            BioFakeCompleteStatusPayload(Request, WINBIO_E_DEVICE_FAILURE, WINBIO_SENSOR_FAILURE, 0);
             return;
         }
 
         if ((mode == BIOFAKE_MODE_READY && hasActive) ||
             (mode == BIOFAKE_MODE_CUSTOM && hasCustom)) {
-            PWINBIO_CAPTURE_DATA cap = (PWINBIO_CAPTURE_DATA)outBuf;
-            PUCHAR bir = (PUCHAR)cap + FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data);
+            PUCHAR bir = (PUCHAR)outBuf + FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data);
             UCHAR purpose = params.Purpose ? params.Purpose : (UCHAR)WINBIO_PURPOSE_VERIFY;
 
             if (mode == BIOFAKE_MODE_CUSTOM && hasCustom) {
                 PVOID p = WdfMemoryGetBuffer(ctx->CustomPayload, NULL);
+                RtlCopyMemory(bir, p, customSize);
                 birSize = customSize;
-                RtlCopyMemory(bir, p, birSize);
             } else {
                 BioFakeBuildBir(bir, purpose,
                                 (UCHAR)(WINBIO_DATA_FLAG_RAW | WINBIO_DATA_FLAG_OPTION_MASK_PRESENT),
                                 secret);
             }
 
-            cap->PayloadSize = (DWORD)(FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data) + birSize);
-            cap->WinBioHresult = S_OK;
-            cap->SensorStatus = WINBIO_SENSOR_ACCEPT;
-            cap->RejectDetail = 0;
-            cap->CaptureData.Size = birSize;
-
             WdfSpinLockAcquire(ctx->Lock);
             ctx->CapturesServed++;
             WdfSpinLockRelease(ctx->Lock);
-            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, cap->PayloadSize);
+            BioFakeFillAndCompleteCapture(Request, bir, birSize);
             return;
         }
 
@@ -690,13 +697,7 @@ BioFakeEvtIoDeviceControl(
         ctx->PendingCapture = Request;
         WdfSpinLockRelease(ctx->Lock);
 
-        status = WdfRequestMarkCancelableEx(Request, BioFakeEvtRequestCancel);
-        if (!NT_SUCCESS(status)) {
-            WdfSpinLockAcquire(ctx->Lock);
-            ctx->PendingCapture = NULL;
-            WdfSpinLockRelease(ctx->Lock);
-            WdfRequestComplete(Request, status);
-        }
+        WdfRequestMarkCancelable(Request, BioFakeEvtRequestCancel);
         return;
     }
 
@@ -750,7 +751,7 @@ BioFakeEvtIoDeviceControl(
 
     case IOCTL_BIOFAKE_ADD_KEY:
     {
-        PBIOFAKE_KEY_ENTRY entry = (PBIOFAKE_KEY_ENTRY)inBuf;
+        PBIOFAKE_KEY_ENTRY entry;
         ULONG slot = BIOFAKE_NO_KEY;
 
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(BIOFAKE_KEY_ENTRY), &inBuf, &inLen);
@@ -850,6 +851,8 @@ BioFakeEvtIoDeviceControl(
         ULONG slot;
         UCHAR secretLocal[BIOFAKE_SECRET_LEN];
         BOOLEAN found = FALSE;
+        WDFREQUEST pendingReq;
+        ULONG birSize;
 
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(BIOFAKE_NAME_VALUE), &inBuf, &inLen);
         if (!NT_SUCCESS(status)) break;
@@ -869,19 +872,35 @@ BioFakeEvtIoDeviceControl(
             break;
         }
 
+        pendingReq = BioFakePopPending(ctx);
+        if (pendingReq == NULL) {
+            status = STATUS_INVALID_DEVICE_STATE;
+            break;
+        }
+
+        birSize = BioFakeBirSize();
         {
-            UCHAR bir[BIOFAKE_PAYLOAD_STACK];
-            BioFakeBuildBir(bir, (UCHAR)WINBIO_PURPOSE_VERIFY,
-                            (UCHAR)(WINBIO_DATA_FLAG_RAW | WINBIO_DATA_FLAG_OPTION_MASK_PRESENT),
-                            secretLocal);
-            BioFakeCompletePendingCapture(ctx, STATUS_SUCCESS, bir, BioFakeBirSize());
+            PVOID out = NULL;
+            SIZE_T outSize = 0;
+
+            if (NT_SUCCESS(WdfRequestRetrieveOutputBuffer(pendingReq, sizeof(DWORD), &out, &outSize)) &&
+                outSize >= (SIZE_T)(FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data) + birSize)) {
+                BioFakeBuildBir((PUCHAR)out + FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data),
+                                (UCHAR)WINBIO_PURPOSE_VERIFY,
+                                (UCHAR)(WINBIO_DATA_FLAG_RAW | WINBIO_DATA_FLAG_OPTION_MASK_PRESENT),
+                                secretLocal);
+                BioFakeFillAndCompleteCapture(pendingReq,
+                    (PUCHAR)out + FIELD_OFFSET(WINBIO_CAPTURE_DATA, CaptureData.Data), birSize);
+            } else {
+                WdfRequestComplete(pendingReq, STATUS_CANCELLED);
+            }
         }
         WdfRequestComplete(Request, STATUS_SUCCESS);
         return;
     }
 
     case IOCTL_BIOFAKE_CANCEL:
-        BioFakeCompletePendingCapture(ctx, WINBIO_E_CANCELED, NULL, 0);
+        BioFakeCompletePendingStatus(ctx, (NTSTATUS)WINBIO_E_CANCELED);
         WdfRequestComplete(Request, STATUS_SUCCESS);
         return;
 
@@ -890,6 +909,7 @@ BioFakeEvtIoDeviceControl(
         PDWORD hdr;
         ULONG size;
         WDFMEMORY mem = NULL;
+        WDF_OBJECT_ATTRIBUTES memAttrs;
 
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(DWORD), &inBuf, &inLen);
         if (!NT_SUCCESS(status)) break;
@@ -901,7 +921,6 @@ BioFakeEvtIoDeviceControl(
             break;
         }
 
-        WDF_OBJECT_ATTRIBUTES memAttrs;
         WDF_OBJECT_ATTRIBUTES_INIT(&memAttrs);
         memAttrs.ParentObject = WdfIoQueueGetDevice(Queue);
 
