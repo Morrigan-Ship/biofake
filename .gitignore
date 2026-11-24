@@ -1,0 +1,18 @@
+# Build outputs
+build/
+obj/
+packages/
+*.user
+*.suo
+*.pdb
+*.lib
+*.exp
+*.iobj
+*.ipdb
+*.log
+
+# CI
+testsign.pfx
+
+# Generated INF catalogs
+*.cat
