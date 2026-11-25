@@ -1,0 +1,137 @@
+;/*++
+;
+;biofake_wudf.inf
+;
+;BioFake virtual fingerprint sensor driver package (UMDF 2.x / WBDI).
+;
+;Installs two software device nodes that share the BioFakeWudf driver DLL:
+;  SWD\BioFake    -> WBDI biometric sensor (class Biometric, exclusive access,
+;                    recognized by the Windows Biometric Framework)
+;  SWD\BioFakeCtl -> control node for biofakectl.exe (add/select/inject keys)
+;
+;The WinBio\Configurations registry block wires the Windows Biometric Service
+;to use the built-in WBDI sensor adapter, the BioFake engine adapter and the
+;built-in WinBio storage adapter - the standard plug-in setup for raw-image
+;fingerprint sensors.
+;
+;Important:
+;    This INF depends on wudfrd.inf which is available starting Windows 11
+;    (same as the official umdf2_fx2 sample).
+;--*/
+
+[Version]
+Signature="$Windows NT$"
+Class=Biometric
+ClassGuid={53D29EF7-377C-4D14-864B-EB3A85769359}
+Provider=%Provider%
+CatalogFile=biofake_wudf.cat
+DriverVer=11/25/2026,1.0.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+BioFakeCopy=13
+
+[SourceDisksNames]
+1 = %MediaDescription%
+
+[SourceDisksFiles]
+BioFakeWudf.dll = 1
+
+[Manufacturer]
+%Provider%=BioFake,NT$ARCH$
+%BioFake%=BioFake.NT$ARCH$.10.0...22000
+
+[BioFake.NT$ARCH$]
+%BioFakeSensorName%=BioFakeSensor_Install, SWD\BioFake
+%BioFakeCtlName%=BioFakeCtl_Install, SWD\BioFakeCtl
+
+[BioFake.NT$ARCH$.10.0...22000]
+%BioFakeSensorName%=BioFakeSensor_Install, SWD\BioFake
+%BioFakeCtlName%=BioFakeCtl_Install, SWD\BioFakeCtl
+
+; =================== WBDI sensor device node ===================
+
+[BioFakeSensor_Install.NT]
+CopyFiles=BioFakeCopy
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+
+[BioFakeSensor_Install.NT.HW]
+AddReg=Biometric_Device_AddReg, DriverPlugInAddReg, DatabaseAddReg
+
+[BioFakeSensor_Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[BioFakeSensor_Install.NT.Wdf]
+UmdfService=BioFakeWudf, BioFakeWudf_Install
+UmdfServiceOrder=BioFakeWudf
+
+; =================== control device node ===================
+
+[BioFakeCtl_Install.NT]
+CopyFiles=BioFakeCopy
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+
+[BioFakeCtl_Install.NT.HW]
+AddReg=Ctl_Device_AddReg
+
+[BioFakeCtl_Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[BioFakeCtl_Install.NT.Wdf]
+UmdfService=BioFakeWudf, BioFakeWudf_Install
+UmdfServiceOrder=BioFakeWudf
+
+[BioFakeWudf_Install]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary="%13%\BioFakeWudf.dll"
+
+[BioFakeCopy]
+BioFakeWudf.dll
+
+; =================== biometric device configuration ===================
+
+[Biometric_Device_AddReg]
+HKR,,"DeviceCharacteristics",0x10001,0x0100     ; Use same security checks on relative opens
+HKR,,"Security",,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"  ; Allow generic-all access to Built-in administrators and Local system
+HKR,,"Exclusive",0x10001,1                       ; WBF requires exclusive access
+HKR,,"DeviceIdleEnabled",0x00010001,1
+HKR,,"UserSetDeviceIdleEnabled",0x00010001,1
+HKR,,"DefaultIdleState",0x10001,1
+HKR,,"DefaultIdleTimeout",0x10001,5000
+
+[Ctl_Device_AddReg]
+HKR,,"DeviceCharacteristics",0x10001,0x0100
+
+; WBF plug-in configuration: built-in sensor/storage adapters + our engine.
+[DriverPlugInAddReg]
+HKR,WinBio\Configurations,DefaultConfiguration,,"0"
+HKR,WinBio\Configurations\0,SensorMode,0x10001,1                                ; 1 = WINBIO_SENSOR_BASIC_MODE
+HKR,WinBio\Configurations\0,SystemSensor,0x10001,1                              ; available to UAC/Winlogon
+HKR,WinBio\Configurations\0,SensorAdapterBinary,,"WinBioSensorAdapter.DLL"      ; Windows built-in WBDI sensor adapter
+HKR,WinBio\Configurations\0,EngineAdapterBinary,,"BioFakeEngineAdapter.dll"     ; our engine (SHA256 matching)
+HKR,WinBio\Configurations\0,StorageAdapterBinary,,"WinBioStorageAdapter.DLL"    ; Windows built-in storage adapter
+HKR,WinBio\Configurations\0,DatabaseId,,"{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01}"
+
+; Register the template database with the Windows Biometric Service.
+[DatabaseAddReg]
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},BiometricType,0x00010001,0x00000008
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},Attributes,0x00010001,0x00000001
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},Format,,"00000000-0000-0000-0000-000000000000"
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},InitialSize,0x00010001,0x00000020
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},AutoCreate,0x00010001,0x00000001
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},AutoName,0x00010001,0x00000001
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},FilePath,,""
+HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{B10FA4CE-6F1D-2A10-3C4E-4E8B9A21CF01},ConnectionString,,""
+
+; =================== strings ===================
+
+[Strings]
+Provider="BioFake Project"
+BioFake="BioFake Project"
+MediaDescription="BioFake Driver Installation Media"
+BioFakeSensorName="BioFake Virtual Fingerprint Sensor"
+BioFakeCtlName="BioFake Virtual Sensor Control"
