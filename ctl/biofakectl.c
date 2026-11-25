@@ -28,6 +28,7 @@ SWD\BioFakeCtl software device node (BIOFAKE_CONTROL_INTERFACE_GUID).
 #include <swdevice.h>
 #include <winbio.h>
 #include <bcrypt.h>
+#include <shlobj_core.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -36,6 +37,7 @@ SWD\BioFakeCtl software device node (BIOFAKE_CONTROL_INTERFACE_GUID).
 #pragma comment(lib, "cfgmgr32.lib")
 #pragma comment(lib, "winbio.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "swdevice.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -207,10 +209,10 @@ CmdCreate(
     RtlZeroMemory(&in, sizeof(in));
     wcsncpy_s(in.Name, BIOFAKE_MAX_NAME_CCH, Name, _TRUNCATE);
 
-    if (BCryptGenRandom(NULL,
-                        in.Seed,
-                        BIOFAKE_SEED_SIZE,
-                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != STATUS_SUCCESS) {
+    if (!BCRYPT_SUCCESS(BCryptGenRandom(NULL,
+                                        in.Seed,
+                                        BIOFAKE_SEED_SIZE,
+                                        BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
         fwprintf(stderr, L"[!] BCryptGenRandom failed\n");
         return 1;
     }
@@ -461,7 +463,7 @@ CmdTest(
     VOID
     )
 {
-    WINBIO_SESSION_HANDLE session = NULL;
+    WINBIO_SESSION_HANDLE session = 0;
     PWINBIO_UNIT_SCHEMA units = NULL;
     PWINBIO_STORAGE_SCHEMA databases = NULL;
     SIZE_T unitCount = 0;
@@ -530,7 +532,7 @@ done:
     if (databases != NULL) {
         WinBioFree(databases);
     }
-    if (session != NULL) {
+    if (session != 0) {
         WinBioCloseSession(session);
     }
 
@@ -789,13 +791,13 @@ CreateSwDevice(
 
     RtlZeroMemory(&info, sizeof(info));
     info.cbSize = sizeof(info);
-    info.pszzInstanceId = InstanceId;
+    info.pszInstanceId = InstanceId;
     info.pszzHardwareIds = HardwareId;      // multi-sz, single entry
     info.CapabilityFlags = SWDeviceCapabilitiesDriverRequired | SWDeviceCapabilitiesSilentInstall;
     info.pszDeviceDescription = Description;
 
     hr = SwDeviceCreate(BIOFAKE_ENUMERATOR,
-                        L"HTREE\\ROOT\0",
+                        L"HTREE\\ROOT\\0",
                         &info,
                         0,
                         NULL,
@@ -865,7 +867,7 @@ CmdInstall(
     if (InfArg != NULL && InfArg[0] != L'\0') {
         wcsncpy_s(infPath, MAX_PATH, InfArg, _TRUNCATE);
     } else {
-        _snwprintf_s(infPath, MAX_PATH, _TRUNCATE, L"%ls\%ls", exeDir, BIOFAKE_INF_NAME);
+        _snwprintf_s(infPath, MAX_PATH, _TRUNCATE, L"%ls\\%ls", exeDir, BIOFAKE_INF_NAME);
     }
     if (GetFileAttributesW(infPath) == INVALID_FILE_ATTRIBUTES) {
         fwprintf(stderr, L"[!] INF not found: %ls\n", infPath);
@@ -875,7 +877,7 @@ CmdInstall(
     //
     // 2. Import the test certificate (best effort; needed for test signing)
     //
-    _snwprintf_s(cerPath, MAX_PATH, _TRUNCATE, L"%ls\%ls", exeDir, BIOFAKE_CERT_NAME);
+    _snwprintf_s(cerPath, MAX_PATH, _TRUNCATE, L"%ls\\%ls", exeDir, BIOFAKE_CERT_NAME);
     if (GetFileAttributesW(cerPath) != INVALID_FILE_ATTRIBUTES) {
         _snwprintf_s(cmd, (SIZE_T)(sizeof(cmd) / sizeof(cmd[0])), _TRUNCATE,
                      L"certutil -addstore -f Root \"%ls\"", cerPath);
@@ -923,10 +925,10 @@ CmdInstall(
     //
     // 5. Install the engine adapter into WinBioPlugIns
     //
-    _snwprintf_s(engineSrc, MAX_PATH, _TRUNCATE, L"%ls\%ls", exeDir, BIOFAKE_ENGINE_DLL);
+    _snwprintf_s(engineSrc, MAX_PATH, _TRUNCATE, L"%ls\\%ls", exeDir, BIOFAKE_ENGINE_DLL);
     _snwprintf_s(engineDstDir, MAX_PATH, _TRUNCATE,
-                 L"%ls\System32\WinBio\WinBioPlugIns", L"C:\\Windows");
-    _snwprintf_s(engineDst, MAX_PATH, _TRUNCATE, L"%ls\%ls", engineDstDir, BIOFAKE_ENGINE_DLL);
+                 L"%ls\\System32\\WinBio\\WinBioPlugIns", L"C:\\Windows");
+    _snwprintf_s(engineDst, MAX_PATH, _TRUNCATE, L"%ls\\%ls", engineDstDir, BIOFAKE_ENGINE_DLL);
 
     CreateDirectoryW(engineDstDir, NULL);
     if (CopyFileW(engineSrc, engineDst, FALSE)) {
@@ -963,15 +965,15 @@ CmdUninstall(
     }
 
     _snwprintf_s(cmd, (SIZE_T)(sizeof(cmd) / sizeof(cmd[0])), _TRUNCATE,
-                 L"pnputil.exe /remove-device \"SWD\BioFake\Sensor\"");
+                 L"pnputil.exe /remove-device \"SWD\\BioFake\\Sensor\"");
     RunCommand(cmd);
 
     _snwprintf_s(cmd, (SIZE_T)(sizeof(cmd) / sizeof(cmd[0])), _TRUNCATE,
-                 L"pnputil.exe /remove-device \"SWD\BioFake\Ctl\"");
+                 L"pnputil.exe /remove-device \"SWD\\BioFake\\Ctl\"");
     RunCommand(cmd);
 
     _snwprintf_s(engineDst, MAX_PATH, _TRUNCATE,
-                 L"C:\\Windows\System32\WinBio\WinBioPlugIns\%ls", BIOFAKE_ENGINE_DLL);
+                 L"C:\\Windows\\System32\\WinBio\\WinBioPlugIns\\%ls", BIOFAKE_ENGINE_DLL);
     DeleteFileW(engineDst);
 
     RestartWbioService();

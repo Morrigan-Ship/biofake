@@ -26,6 +26,16 @@ Template blob layout (inside the BIR Vendor Data Block):
 
 #include <initguid.h>
 #include <windows.h>
+
+// winbio_adapter.h uses the DDK-style ARGUMENT_PRESENT macro inside its
+// inline WbioSensor*/WbioStorage* helper functions. That macro comes from
+// ntdef.h in kernel-mode builds; user-mode headers never define it, so the
+// compiler reports C4013 and treats it as an implicit int function. Define
+// it here, before the adapter header, unless it is already available.
+#ifndef ARGUMENT_PRESENT
+#define ARGUMENT_PRESENT(arg) ((arg) != NULL)
+#endif
+
 #include <winbio_adapter.h>
 #include <bcrypt.h>
 
@@ -262,7 +272,10 @@ EngineAdapterAttach(
         return E_OUTOFMEMORY;
     }
 
-    Pipeline->EngineContext = ctx;
+    // Pipeline->EngineContext is PWINIBIO_ENGINE_CONTEXT, an opaque pointer
+    // type declared by winbio_adapter.h. Route through PVOID so the private
+    // context can be stored without an incompatible-pointer warning.
+    Pipeline->EngineContext = (PVOID)ctx;
     return S_OK;
 }
 
@@ -474,7 +487,7 @@ EngineAdapterAcceptSampleData(
     hr = BioFakeSha256(data, size, ctx->CurrentHash);
     if (FAILED(hr)) {
         *RejectDetail = WINBIO_FP_MERGE_FAILURE;
-        return WINBIO_E_INTERNAL_ERROR;
+        return E_FAIL;
     }
 
     ctx->HasCurrentSample = TRUE;
@@ -1059,6 +1072,9 @@ EngineAdapterControlUnitPrivileged(
 
 static WINBIO_ENGINE_INTERFACE g_EngineInterface;
 
+// The Windows Biometric Service resolves this entry point by name after
+// loading the adapter DLL, so it must be exported from the DLL.
+__declspec(dllexport)
 HRESULT
 WINAPI
 WbioQueryEngineInterface(
@@ -1088,7 +1104,10 @@ DllMain(
         DisableThreadLibraryCalls(hinstDLL);
 
         RtlZeroMemory(&g_EngineInterface, sizeof(g_EngineInterface));
-        g_EngineInterface.Version = WINBIO_MAKE_INTERFACE_VERSION(1, 0);
+        // WINBIO_MAKE_INTERFACE_VERSION expands to a braced initializer, which
+        // cannot be used in an assignment; set the fields directly instead.
+        g_EngineInterface.Version.MajorVersion = 1;
+        g_EngineInterface.Version.MinorVersion = 0;
         g_EngineInterface.Type = WINBIO_ADAPTER_TYPE_ENGINE;
         g_EngineInterface.Size = sizeof(WINBIO_ENGINE_INTERFACE);
         g_EngineInterface.AdapterId = BIOFAKE_VENDOR_FORMAT_GUID;

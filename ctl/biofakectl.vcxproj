@@ -40,7 +40,7 @@
       <PreprocessorDefinitions>%(PreprocessorDefinitions);_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>cfgmgr32.lib;winbio.lib;bcrypt.lib;user32.lib;shell32.lib;advapi32.lib;newdev.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cfgmgr32.lib;winbio.lib;bcrypt.lib;swdevice.lib;user32.lib;shell32.lib;advapi32.lib;newdev.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Console</SubSystem>
       <EntryPointSymbol>wmainCRTStartup</EntryPointSymbol>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>

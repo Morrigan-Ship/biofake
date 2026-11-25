@@ -58,8 +58,12 @@ DEFINE_GUID(BIOFAKE_VENDOR_FORMAT_GUID,
 // Vendor device type (range 0x8000+ is reserved for vendors).
 #define FILE_DEVICE_BIOFAKE   0x8000
 
+// CTL_CODE expands to signed int arithmetic; cast to DWORD so the private
+// IOCTL constants are unsigned. They are passed to DWORD parameters and
+// compared against ULONG control codes, which otherwise triggers C4245 at
+// every call site.
 #define BIOFAKE_CTL_CODE(code) \
-    CTL_CODE(FILE_DEVICE_BIOFAKE, (code), METHOD_BUFFERED, FILE_ANY_ACCESS)
+    ((DWORD)CTL_CODE(FILE_DEVICE_BIOFAKE, (code), METHOD_BUFFERED, FILE_ANY_ACCESS))
 
 #define IOCTL_BIOFAKE_ADD_KEY     BIOFAKE_CTL_CODE(0x001) // in: BIOFAKE_KEY_ADD_IN
 #define IOCTL_BIOFAKE_DELETE_KEY  BIOFAKE_CTL_CODE(0x002) // in: BIOFAKE_NAME_IN
