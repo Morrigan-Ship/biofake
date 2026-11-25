@@ -1,4 +1,14 @@
 <Project>
+  <PropertyGroup>
+    <!--
+      C++ toolset used by the plain helper projects (engine/ctl).
+      Default: v143 (VS 2022). When building with VS 2026 pass
+      /p:BioFakeCppToolset=v145 on the msbuild command line.
+      The UMDF driver project is not affected: it always uses the WDK
+      driver toolset (WindowsUserModeDriver10.0).
+    -->
+    <BioFakeCppToolset Condition="'$(BioFakeCppToolset)' == ''">v143</BioFakeCppToolset>
+  </PropertyGroup>
   <!-- WDK NuGet integration (same scheme as microsoft/Windows-driver-samples CI) -->
   <Import Project="packages\Microsoft.Windows.WDK.x64.10.0.28000.2526\build\native\Microsoft.Windows.WDK.x64.props" Condition="Exists('packages\Microsoft.Windows.WDK.x64.10.0.28000.2526\build\native\Microsoft.Windows.WDK.x64.props') and '$(Platform)' == 'x64'" />
   <Import Project="packages\Microsoft.Windows.SDK.CPP.x64.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.x64.props" Condition="Exists('packages\Microsoft.Windows.SDK.CPP.x64.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.x64.props') and '$(Platform)' == 'x64'" />

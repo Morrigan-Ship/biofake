@@ -194,13 +194,13 @@ BioFakeEvtDeviceAdd(
             return status;
         }
 
-        status = WdfDeviceSetDeviceInterfaceState(device,
-                                                  (LPGUID)&GUID_DEVINTERFACE_BIOMETRIC_READER,
-                                                  NULL,
-                                                  TRUE);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
+        //
+        // WdfDeviceSetDeviceInterfaceState returns VOID and cannot fail.
+        //
+        WdfDeviceSetDeviceInterfaceState(device,
+                                         (LPGUID)&GUID_DEVINTERFACE_BIOMETRIC_READER,
+                                         NULL,
+                                         TRUE);
     } else {
         //
         // Control node: publish the private control interface for
@@ -213,13 +213,10 @@ BioFakeEvtDeviceAdd(
             return status;
         }
 
-        status = WdfDeviceSetDeviceInterfaceState(device,
-                                                  (LPGUID)&BIOFAKE_CONTROL_INTERFACE_GUID,
-                                                  NULL,
-                                                  TRUE);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
+        WdfDeviceSetDeviceInterfaceState(device,
+                                         (LPGUID)&BIOFAKE_CONTROL_INTERFACE_GUID,
+                                         NULL,
+                                         TRUE);
     }
 
     return status;

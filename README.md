@@ -20,7 +20,9 @@ Windows 虚拟生物识别硬件（虚拟指纹传感器）——通过一个用
 
 GitHub Actions 已配置（.github/workflows/build.yml，windows-latest + WDK NuGet + Inf2Cat + 测试签名），产物在 Actions Artifacts。
 
-本地：VS2022 + WDK，`msbuild biofake.sln /p:Configuration=Release /p:Platform=x64`。
+本地（VS2022 + WDK）：`msbuild biofake.sln /m /p:Configuration=Release /p:Platform=x64`。
+
+本地（VS2026 / v145 toolset）：`msbuild biofake.sln /m /p:Configuration=Release /p:Platform=x64 /p:BioFakeCppToolset=v145 /p:SkipPackageVerification=true`。`BioFakeCppToolset` 只切换 engine/ctl 两个普通 C++ 工程（驱动工程固定使用 WDK 的 WindowsUserModeDriver10.0 toolset）；`SkipPackageVerification=true` 仅跳过 InfVerif/DPVerifier（本地 WDK 的 InfVerif.dll 加载失败时使用），不影响 Inf2Cat 生成 .cat。
 
 ## 安装（测试签名模式）
 
@@ -33,6 +35,8 @@ pnputil /add-driver biofake_wudf.inf /install
 .\biofakectl.exe install .\biofake_wudf.inf   # 创建 Root\BioFake / Root\BioFakeCtl 设备节点
 .\biofakectl.exe test                          # WinBio 枚举验证
 ```
+
+或直接运行包内脚本：`powershell -ExecutionPolicy Bypass -File .\install.ps1 -EnableTestSigning -Test`。
 
 ## 使用
 

@@ -305,7 +305,6 @@ BioFakeOnGetStatus(
     PBIOFAKE_STATUS_OUT out;
     PVOID buffer = NULL;
     size_t size = 0;
-    WDF_IO_QUEUE_STATE queueState;
     NTSTATUS status;
 
     status = WdfRequestRetrieveOutputBuffer(Request,
@@ -337,14 +336,15 @@ BioFakeOnGetStatus(
 
     //
     // Best-effort check whether a capture request is currently parked in
-    // the sensor node's manual capture queue.
+    // the sensor node's manual capture queue. WdfIoQueueGetState reports
+    // the queued-request count through its QueueRequests out-parameter.
     //
     out->PendingCapture = FALSE;
     if (Ctx->CaptureQueue != NULL) {
-        RtlZeroMemory(&queueState, sizeof(queueState));
-        if (NT_SUCCESS(WdfIoQueueGetState(Ctx->CaptureQueue, &queueState))) {
-            out->PendingCapture = (queueState.RequestsInQueue > 0) ? TRUE : FALSE;
-        }
+        ULONG queueRequests = 0;
+
+        (VOID)WdfIoQueueGetState(Ctx->CaptureQueue, &queueRequests, NULL);
+        out->PendingCapture = (queueRequests > 0) ? TRUE : FALSE;
     }
 
     WdfRequestCompleteWithInformation(Request,
