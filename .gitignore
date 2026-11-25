@@ -6,3 +6,5 @@ dist/
 *.user
 *.pdb
 *.log
+x64/
+package/
