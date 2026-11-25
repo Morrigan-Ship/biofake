@@ -1,0 +1,10 @@
+; BioFakeEngineAdapter.def - DLL exports for the BioFake WinBio engine adapter.
+;
+; The Windows Biometric Service resolves WbioQueryEngineInterface by name
+; after loading the adapter DLL. The SDK header winbio_adapter.h declares
+; that function as a plain HRESULT WINAPI export, so the C definition in
+; engine.c must not repeat it with __declspec(dllexport) (C2375); the export
+; is listed here instead.
+
+EXPORTS
+    WbioQueryEngineInterface

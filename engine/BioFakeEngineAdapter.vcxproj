@@ -38,6 +38,7 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
+      <ModuleDefinitionFile>BioFakeEngineAdapter.def</ModuleDefinitionFile>
       <AdditionalDependencies>bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -53,6 +54,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="engine.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="BioFakeEngineAdapter.def" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

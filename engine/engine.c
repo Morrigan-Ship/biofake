@@ -1073,8 +1073,12 @@ EngineAdapterControlUnitPrivileged(
 static WINBIO_ENGINE_INTERFACE g_EngineInterface;
 
 // The Windows Biometric Service resolves this entry point by name after
-// loading the adapter DLL, so it must be exported from the DLL.
-__declspec(dllexport)
+// loading the adapter DLL, so it must be exported from the DLL. The SDK
+// header winbio_adapter.h already declares the function (plain HRESULT
+// WINAPI, same parameter list), and the definition must match that
+// declaration exactly: adding __declspec(dllexport) here redeclares it with
+// different linkage and fails with C2375. The DLL export is therefore listed
+// in BioFakeEngineAdapter.def (wired through ModuleDefinitionFile).
 HRESULT
 WINAPI
 WbioQueryEngineInterface(
